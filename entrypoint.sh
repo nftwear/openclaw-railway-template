@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+: "${OPENCLAW_STATE_DIR:=/data/.openclaw}"
+: "${OPENCLAW_WORKSPACE_DIR:=/data/workspace}"
+export OPENCLAW_STATE_DIR
+export OPENCLAW_WORKSPACE_DIR
+
+mkdir -p /data "$OPENCLAW_STATE_DIR" "$OPENCLAW_WORKSPACE_DIR"
+
 chown -R openclaw:openclaw /data
 chmod 700 /data
 

@@ -28,8 +28,8 @@ This template exposes your OpenClaw gateway to the public internet.
 2. Ensure a volume is mounted at `/data`.
 3. Set variables:
    - `SETUP_PASSWORD` (required)
-   - `OPENCLAW_STATE_DIR=/data/.openclaw`
-   - `OPENCLAW_WORKSPACE_DIR=/data/workspace`
+   - `OPENCLAW_STATE_DIR=/data/.openclaw` (defaulted by template)
+   - `OPENCLAW_WORKSPACE_DIR=/data/workspace` (defaulted by template)
    - Optional: `ENABLE_WEB_TUI=true`
 4. Open `https://<your-domain>/setup` and complete onboarding.
 5. Open `https://<your-domain>/openclaw` from the setup page.
@@ -42,8 +42,8 @@ This template exposes your OpenClaw gateway to the public internet.
 
 ### Recommended
 
-- `OPENCLAW_STATE_DIR=/data/.openclaw`
-- `OPENCLAW_WORKSPACE_DIR=/data/workspace`
+- `OPENCLAW_STATE_DIR=/data/.openclaw` (already set in `railway.toml`)
+- `OPENCLAW_WORKSPACE_DIR=/data/workspace` (already set in `railway.toml`)
 - `OPENCLAW_GATEWAY_TOKEN` (stable token across redeploys)
 
 ### Optional
@@ -138,6 +138,7 @@ docker run --rm -p 8080:8080 \
 
 - `OPENCLAW_STATE_DIR` or `OPENCLAW_WORKSPACE_DIR` is not on `/data`
 - Fix both vars and redeploy
+- Confirm the Railway volume is mounted at `/data` on this service
 
 ### TUI not visible
 

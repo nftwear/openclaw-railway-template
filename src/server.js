@@ -10,12 +10,32 @@ import pty from "node-pty";
 import { WebSocketServer } from "ws";
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
+const DATA_DIR = "/data";
+
+function canUseDataDir() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) return false;
+    fs.accessSync(DATA_DIR, fs.constants.R_OK | fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const HAS_DATA_DIR = canUseDataDir();
+const DEFAULT_STATE_DIR = HAS_DATA_DIR
+  ? path.join(DATA_DIR, ".openclaw")
+  : path.join(os.homedir(), ".openclaw");
+const DEFAULT_WORKSPACE_DIR = HAS_DATA_DIR
+  ? path.join(DATA_DIR, "workspace")
+  : path.join(DEFAULT_STATE_DIR, "workspace");
+
 const STATE_DIR =
   process.env.OPENCLAW_STATE_DIR?.trim() ||
-  path.join(os.homedir(), ".openclaw");
+  DEFAULT_STATE_DIR;
 const WORKSPACE_DIR =
   process.env.OPENCLAW_WORKSPACE_DIR?.trim() ||
-  path.join(STATE_DIR, "workspace");
+  DEFAULT_WORKSPACE_DIR;
 
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 
@@ -68,6 +88,45 @@ const log = {
   error: (category, message) => writeLog("ERROR", category, message),
 };
 
+function isUnderDataDir(targetPath) {
+  const resolved = path.resolve(targetPath);
+  return resolved === DATA_DIR || resolved.startsWith(`${DATA_DIR}${path.sep}`);
+}
+
+function logPersistenceSummary() {
+  const railway = Boolean(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_ID);
+  const stateUnderData = isUnderDataDir(STATE_DIR);
+  const workspaceUnderData = isUnderDataDir(WORKSPACE_DIR);
+
+  log.info(
+    "persistence",
+    `dataDirAvailable=${HAS_DATA_DIR} stateDir=${STATE_DIR} workspaceDir=${WORKSPACE_DIR}`,
+  );
+
+  if (railway && (!stateUnderData || !workspaceUnderData)) {
+    log.warn(
+      "persistence",
+      "Running on Railway without /data-backed OpenClaw paths. Set OPENCLAW_STATE_DIR=/data/.openclaw and OPENCLAW_WORKSPACE_DIR=/data/workspace to persist across redeploys.",
+    );
+  }
+}
+
+function getPersistenceStatus() {
+  const railway = Boolean(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_ID);
+  const stateUnderData = isUnderDataDir(STATE_DIR);
+  const workspaceUnderData = isUnderDataDir(WORKSPACE_DIR);
+  return {
+    railway,
+    dataDirAvailable: HAS_DATA_DIR,
+    stateDir: STATE_DIR,
+    workspaceDir: WORKSPACE_DIR,
+    stateUnderData,
+    workspaceUnderData,
+    expectedPersistentOnRailway:
+      !railway || (HAS_DATA_DIR && stateUnderData && workspaceUnderData),
+  };
+}
+
 function resolveGatewayToken() {
   const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
   if (envTok) return envTok;
@@ -92,6 +151,7 @@ function resolveGatewayToken() {
 
 const OPENCLAW_GATEWAY_TOKEN = resolveGatewayToken();
 process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
+logPersistenceSummary();
 
 let cachedOpenclawVersion = null;
 let cachedChannelsHelp = null;
@@ -969,12 +1029,14 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
     OPENCLAW_NODE,
     clawArgs(["channels", "add", "--help"]),
   );
+  const persistence = getPersistenceStatus();
   res.json({
     wrapper: {
       node: process.version,
       port: PORT,
       stateDir: STATE_DIR,
       workspaceDir: WORKSPACE_DIR,
+      persistence,
       configPath: configPath(),
       gatewayTokenFromEnv: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN?.trim()),
       gatewayTokenPersisted: fs.existsSync(
