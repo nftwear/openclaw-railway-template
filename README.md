@@ -16,6 +16,7 @@ This template exposes your OpenClaw gateway to the public internet.
 
 - OpenClaw Gateway + Control UI at `/` and `/openclaw`
 - Setup Wizard at `/setup` (Basic auth protected)
+- Microsoft Foundry (Azure OpenAI) setup in the wizard (API key + endpoint)
 - Optional browser TUI at `/tui`
 - Persistent state on Railway volume (`/data`)
 - Health endpoint at `/healthz`
@@ -63,6 +64,18 @@ This template exposes your OpenClaw gateway to the public internet.
 - If using Telegram/Discord, approve pending devices from setup tools
 
 ## Chat Token Prep
+
+### Microsoft Foundry (Azure OpenAI)
+
+In `/setup`, choose:
+- Provider Group: `Microsoft Foundry`
+- Auth Method: `Microsoft Foundry (API key)`
+
+Then provide:
+- Azure OpenAI API key
+- Endpoint URL (`https://<resource>.openai.azure.com` or `https://<project>.services.ai.azure.com`)
+- Optional model value as deployment name or `microsoft-foundry/<deployment>`
+- API mode (`openai-responses` recommended for GPT/o-series/Codex deployments)
 
 ### Telegram
 

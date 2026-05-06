@@ -428,6 +428,18 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
       ],
     },
     {
+      value: "microsoft-foundry",
+      label: "Microsoft Foundry",
+      hint: "Azure OpenAI API key + endpoint",
+      options: [
+        {
+          value: "microsoft-foundry-apikey",
+          label: "Microsoft Foundry (API key)",
+          hint: "Use Azure OpenAI API key and Foundry endpoint URL",
+        },
+      ],
+    },
+    {
       value: "anthropic",
       label: "Anthropic",
       hint: "API key",
@@ -548,7 +560,11 @@ function buildOnboardArgs(payload) {
   ];
 
   if (payload.authChoice) {
-    args.push("--auth-choice", payload.authChoice);
+    const onboardAuthChoice =
+      payload.authChoice === "microsoft-foundry-apikey"
+        ? "skip"
+        : payload.authChoice;
+    args.push("--auth-choice", onboardAuthChoice);
 
     const secret = (payload.authSecret || "").trim();
     const map = {
@@ -565,7 +581,7 @@ function buildOnboardArgs(payload) {
       "synthetic-api-key": "--synthetic-api-key",
       "opencode-zen": "--opencode-zen-api-key",
     };
-    const flag = map[payload.authChoice];
+    const flag = map[onboardAuthChoice];
     if (flag && secret) {
       args.push(flag, secret);
     }
@@ -575,12 +591,147 @@ function buildOnboardArgs(payload) {
   return args;
 }
 
+function normalizeFoundryEndpoint(endpoint) {
+  const trimmed = (endpoint || "").trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = new URL(trimmed);
+    parsed.search = "";
+    parsed.hash = "";
+    const normalizedPath = parsed.pathname
+      .replace(/\/openai(?:$|\/).*/i, "")
+      .replace(/\/+$/, "");
+    return `${parsed.origin}${normalizedPath && normalizedPath !== "/" ? normalizedPath : ""}`;
+  } catch {
+    const withoutQuery = trimmed.replace(/[?#].*$/, "").replace(/\/+$/, "");
+    return withoutQuery.replace(/\/openai(?:$|\/).*/i, "");
+  }
+}
+
+function resolveFoundryModelId(modelValue) {
+  const trimmed = (modelValue || "").trim();
+  if (!trimmed) return "gpt-4o";
+  if (trimmed.startsWith("microsoft-foundry/")) {
+    return trimmed.slice("microsoft-foundry/".length).trim();
+  }
+  return trimmed;
+}
+
+function supportsFoundryImageInput(modelName) {
+  const normalized = modelName.toLowerCase();
+  return (
+    normalized.startsWith("gpt-") ||
+    normalized.startsWith("o1") ||
+    normalized.startsWith("o3") ||
+    normalized.startsWith("o4") ||
+    normalized === "computer-use-preview"
+  );
+}
+
+function requiresFoundryMaxCompletionTokens(modelName) {
+  const normalized = modelName.toLowerCase();
+  return (
+    normalized.startsWith("gpt-5") ||
+    normalized.startsWith("o1") ||
+    normalized.startsWith("o3") ||
+    normalized.startsWith("o4")
+  );
+}
+
+function buildFoundryProviderConfig(payload) {
+  const endpoint = normalizeFoundryEndpoint(payload.foundryEndpoint);
+  const modelId = resolveFoundryModelId(payload.model);
+  const api =
+    payload.foundryApiMode === "openai-completions"
+      ? "openai-completions"
+      : "openai-responses";
+  const apiKey = payload.authSecret.trim();
+  const maxTokensField = requiresFoundryMaxCompletionTokens(modelId)
+    ? "max_completion_tokens"
+    : "max_tokens";
+
+  const modelConfig = {
+    id: modelId,
+    name: modelId,
+    api,
+    reasoning: false,
+    input: supportsFoundryImageInput(modelId) ? ["text", "image"] : ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 16384,
+  };
+
+  if (api === "openai-responses") {
+    modelConfig.compat = {
+      supportsStore: false,
+      maxTokensField,
+    };
+  } else if (maxTokensField === "max_completion_tokens") {
+    modelConfig.compat = { maxTokensField };
+  }
+
+  return {
+    modelId,
+    providerConfig: {
+      baseUrl: `${endpoint}/openai/v1`,
+      api,
+      authHeader: false,
+      apiKey,
+      headers: { "api-key": apiKey },
+      models: [modelConfig],
+    },
+  };
+}
+
+async function configureMicrosoftFoundry(payload) {
+  const { modelId, providerConfig } = buildFoundryProviderConfig(payload);
+  const modelName = `microsoft-foundry/${modelId}`;
+
+  const setProvider = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs([
+      "config",
+      "set",
+      "--json",
+      "models.providers.microsoft-foundry",
+      JSON.stringify(providerConfig),
+    ]),
+  );
+
+  const enablePlugin = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs(["config", "set", "plugins.entries.microsoft-foundry.enabled", "true"]),
+  );
+
+  const setModel = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs(["models", "set", modelName]),
+  );
+
+  if (setProvider.code !== 0 || enablePlugin.code !== 0 || setModel.code !== 0) {
+    throw new Error(
+      "Microsoft Foundry configuration failed. Check setup logs for details.",
+    );
+  }
+
+  return (
+    `[config] models.providers.microsoft-foundry exit=${setProvider.code}\n${setProvider.output || ""}` +
+    `\n[config] plugins.entries.microsoft-foundry.enabled=true exit=${enablePlugin.code}\n${enablePlugin.output || ""}` +
+    `\n[models set] ${modelName} exit=${setModel.code}\n${setModel.output || ""}`
+  );
+}
+
 function runCmd(cmd, args, opts = {}) {
   return new Promise((resolve) => {
+    const extraEnv = opts.env || {};
+    const spawnOpts = { ...opts };
+    delete spawnOpts.env;
+
     const proc = childProcess.spawn(cmd, args, {
-      ...opts,
+      ...spawnOpts,
       env: {
         ...process.env,
+        ...extraEnv,
         OPENCLAW_STATE_DIR: STATE_DIR,
         OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
       },
@@ -601,6 +752,7 @@ function runCmd(cmd, args, opts = {}) {
 
 const VALID_AUTH_CHOICES = [
   "openai-api-key",
+  "microsoft-foundry-apikey",
   "apiKey",
   "gemini-api-key",
   "openrouter-api-key",
@@ -618,7 +770,7 @@ const VALID_AUTH_CHOICES = [
 ];
 
 function validatePayload(payload) {
-if (payload.authChoice && !VALID_AUTH_CHOICES.includes(payload.authChoice)) {
+  if (payload.authChoice && !VALID_AUTH_CHOICES.includes(payload.authChoice)) {
     return `Invalid authChoice: ${payload.authChoice}`;
   }
   const stringFields = [
@@ -627,11 +779,44 @@ if (payload.authChoice && !VALID_AUTH_CHOICES.includes(payload.authChoice)) {
     "slackBotToken",
     "slackAppToken",
     "authSecret",
+    "foundryEndpoint",
+    "foundryApiMode",
     "model",
   ];
   for (const field of stringFields) {
     if (payload[field] !== undefined && typeof payload[field] !== "string") {
       return `Invalid ${field}: must be a string`;
+    }
+  }
+  if (
+    payload.authChoice === "microsoft-foundry-apikey" &&
+    !payload.foundryEndpoint?.trim()
+  ) {
+    return "Missing foundryEndpoint for microsoft-foundry-apikey";
+  }
+  if (
+    payload.authChoice === "microsoft-foundry-apikey" &&
+    !payload.authSecret?.trim()
+  ) {
+    return "Missing authSecret for microsoft-foundry-apikey";
+  }
+  if (payload.foundryEndpoint?.trim() && !URL.canParse(payload.foundryEndpoint.trim())) {
+    return "Invalid foundryEndpoint: must be a valid URL";
+  }
+  if (
+    payload.foundryApiMode &&
+    payload.foundryApiMode !== "openai-responses" &&
+    payload.foundryApiMode !== "openai-completions"
+  ) {
+    return "Invalid foundryApiMode: must be openai-responses or openai-completions";
+  }
+  if (payload.authChoice === "microsoft-foundry-apikey" && payload.model?.trim()) {
+    const model = payload.model.trim();
+    if (model.includes("/") && !model.startsWith("microsoft-foundry/")) {
+      return "Invalid model: for Microsoft Foundry use deployment name or microsoft-foundry/<deployment>";
+    }
+    if (model.startsWith("microsoft-foundry/") && !resolveFoundryModelId(model)) {
+      return "Invalid model: missing deployment name after microsoft-foundry/";
     }
   }
   return null;
@@ -701,7 +886,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       );
       extra += `[config] gateway.trustedProxies exit=${proxiesResult.code}\n`;
 
-      if (payload.model?.trim()) {
+      if (payload.authChoice === "microsoft-foundry-apikey") {
+        extra += "\n[setup] Configuring Microsoft Foundry provider...\n";
+        extra += `${await configureMicrosoftFoundry(payload)}\n`;
+      } else if (payload.model?.trim()) {
         extra += `[setup] Setting model to ${payload.model.trim()}...\n`;
         const modelResult = await runCmd(
           OPENCLAW_NODE,

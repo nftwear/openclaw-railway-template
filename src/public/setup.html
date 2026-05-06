@@ -21,6 +21,8 @@
       authChoices: [],
       selectedAuth: '',
       authSecret: '',
+      foundryEndpoint: '',
+      foundryApiMode: 'openai-responses',
       telegramToken: '',
       discordToken: '',
       slackBotToken: '',
@@ -43,6 +45,24 @@
 
       get currentGroup() {
         return this.authGroups.find(g => g.value === this.selectedGroup);
+      },
+
+      get isMicrosoftFoundryAuth() {
+        return this.selectedAuth === 'microsoft-foundry-apikey';
+      },
+
+      get modelPlaceholder() {
+        if (this.isMicrosoftFoundryAuth) {
+          return 'e.g. microsoft-foundry/my-gpt5-deployment or my-gpt5-deployment';
+        }
+        return 'e.g. openai/gpt-4.1, anthropic/claude-sonnet-4';
+      },
+
+      get modelHint() {
+        if (this.isMicrosoftFoundryAuth) {
+          return 'For Microsoft Foundry use deployment name or microsoft-foundry/<deployment>. Leave blank to default to gpt-4o.';
+        }
+        return 'Format: provider/model-name';
       },
 
       async init() {
@@ -99,9 +119,25 @@
       },
 
       async runSetup() {
+        if (this.isMicrosoftFoundryAuth && !this.foundryEndpoint.trim()) {
+          alert('Microsoft Foundry endpoint is required');
+          return;
+        }
+        if (
+          this.isMicrosoftFoundryAuth &&
+          this.model.trim() &&
+          this.model.includes('/') &&
+          !this.model.startsWith('microsoft-foundry/')
+        ) {
+          alert('For Microsoft Foundry, use deployment name or microsoft-foundry/<deployment>');
+          return;
+        }
+
         const payload = {
           authChoice: this.selectedAuth,
           authSecret: this.authSecret,
+          foundryEndpoint: this.foundryEndpoint,
+          foundryApiMode: this.foundryApiMode,
           model: this.model,
           telegramToken: this.telegramToken,
           discordToken: this.discordToken,
@@ -517,14 +553,38 @@
           </div>
 
           <div class="form-group">
-            <label class="label">API Key / Token</label>
-            <input x-model="authSecret" type="password" placeholder="Paste your API key or token" class="input" />
+            <label class="label" x-text="isMicrosoftFoundryAuth ? 'Azure OpenAI API Key' : 'API Key / Token'"></label>
+            <input
+              x-model="authSecret"
+              type="password"
+              :placeholder="isMicrosoftFoundryAuth ? 'Paste your Azure OpenAI API key' : 'Paste your API key or token'"
+              class="input"
+            />
+          </div>
+
+          <div class="form-group" x-show="isMicrosoftFoundryAuth">
+            <label class="label">Microsoft Foundry Endpoint URL</label>
+            <input
+              x-model="foundryEndpoint"
+              type="text"
+              placeholder="https://xxx.openai.azure.com or https://xxx.services.ai.azure.com"
+              class="input"
+            />
+            <p class="form-hint">Accepted endpoint patterns include Azure OpenAI and Azure AI Foundry project endpoints.</p>
+          </div>
+
+          <div class="form-group" x-show="isMicrosoftFoundryAuth">
+            <label class="label">Foundry Request API</label>
+            <select x-model="foundryApiMode" class="select">
+              <option value="openai-responses">Responses API (recommended for GPT/o-series/Codex)</option>
+              <option value="openai-completions">Chat Completions API (for other Foundry chat models)</option>
+            </select>
           </div>
 
           <div class="form-group">
             <label class="label">Model</label>
-            <input x-model="model" type="text" placeholder="e.g. openai/gpt-4.1, anthropic/claude-sonnet-4" class="input" />
-            <p class="form-hint">Format: provider/model-name</p>
+            <input x-model="model" type="text" :placeholder="modelPlaceholder" class="input" />
+            <p class="form-hint" x-text="modelHint"></p>
           </div>
         </div>
       </div>
@@ -594,6 +654,14 @@
               <div class="config-row">
                 <dt>Model</dt>
                 <dd x-text="model || 'Default'"></dd>
+              </div>
+              <div class="config-row" x-show="isMicrosoftFoundryAuth">
+                <dt>Foundry Endpoint</dt>
+                <dd x-text="foundryEndpoint || 'Missing'"></dd>
+              </div>
+              <div class="config-row" x-show="isMicrosoftFoundryAuth">
+                <dt>Foundry API</dt>
+                <dd x-text="foundryApiMode"></dd>
               </div>
               <div class="config-row">
                 <dt>Channels</dt>
