@@ -12,6 +12,24 @@ RUN apt-get update \
     python3 \
     build-essential \
     zip \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatspi2.0-0 \
+    libcairo2 \
+    libcups2 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    libxshmfence1 \
+    fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g "openclaw@${OPENCLAW_VERSION}" clawhub@latest
