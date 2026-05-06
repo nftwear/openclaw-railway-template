@@ -208,6 +208,183 @@ function isConfigured() {
   }
 }
 
+function parseBooleanEnv(value, defaultValue) {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return defaultValue;
+}
+
+function parseListEnv(value) {
+  const raw = value?.trim();
+  if (!raw) return null;
+  if (raw.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((entry) => String(entry).trim())
+          .filter(Boolean);
+      }
+    } catch {}
+  }
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+const AUTOCONFIG_ENABLED = parseBooleanEnv(
+  process.env.OPENCLAW_BOOTSTRAP_AUTOCONFIG,
+  Boolean(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_ID),
+);
+const AUTOCONFIG_TELEGRAM_DM_POLICY =
+  process.env.OPENCLAW_BOOTSTRAP_TELEGRAM_DM_POLICY?.trim() || "pairing";
+const AUTOCONFIG_TELEGRAM_GROUP_POLICY =
+  process.env.OPENCLAW_BOOTSTRAP_TELEGRAM_GROUP_POLICY?.trim() || "allowlist";
+const AUTOCONFIG_TELEGRAM_ALLOW_FROM =
+  parseListEnv(process.env.OPENCLAW_BOOTSTRAP_TELEGRAM_ALLOW_FROM) ?? [];
+const AUTOCONFIG_SANDBOX_MODE =
+  process.env.OPENCLAW_BOOTSTRAP_SANDBOX_MODE?.trim() || "off";
+const AUTOCONFIG_EXEC_POLICY_PRESET =
+  process.env.OPENCLAW_BOOTSTRAP_EXEC_POLICY_PRESET?.trim() || "yolo";
+const AUTOCONFIG_EXEC_HOST =
+  process.env.OPENCLAW_BOOTSTRAP_EXEC_HOST?.trim() || "gateway";
+const AUTOCONFIG_OWNER_ALLOW_FROM =
+  parseListEnv(process.env.OPENCLAW_BOOTSTRAP_OWNER_ALLOW_FROM) ??
+  parseListEnv(process.env.OPENCLAW_OWNER_ALLOW_FROM);
+
+async function configSetJson(pathExpr, value) {
+  return runCmd(
+    OPENCLAW_NODE,
+    clawArgs([
+      "config",
+      "set",
+      "--json",
+      pathExpr,
+      JSON.stringify(value),
+    ]),
+  );
+}
+
+async function configPathExists(pathExpr) {
+  const result = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs(["config", "get", pathExpr]),
+  );
+  return result.code === 0;
+}
+
+async function configureTelegramViaChannelsAdd(token) {
+  const add = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs([
+      "channels",
+      "add",
+      "--channel",
+      "telegram",
+      "--account",
+      "default",
+      "--token",
+      token,
+    ]),
+  );
+  return add;
+}
+
+async function applyManagedDefaults(reason = "boot") {
+  const report = [];
+
+  if (!AUTOCONFIG_ENABLED) {
+    report.push(`[managed-defaults] disabled (reason=${reason})`);
+    return report.join("\n");
+  }
+  if (!isConfigured()) {
+    report.push(`[managed-defaults] skipped: openclaw not configured (reason=${reason})`);
+    return report.join("\n");
+  }
+
+  report.push(`[managed-defaults] applying (reason=${reason})`);
+
+  const sandboxResult = await configSetJson(
+    "agents.defaults.sandbox.mode",
+    AUTOCONFIG_SANDBOX_MODE,
+  );
+  report.push(
+    `[managed-defaults] agents.defaults.sandbox.mode=${AUTOCONFIG_SANDBOX_MODE} exit=${sandboxResult.code}`,
+  );
+
+  const presetResult = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs(["exec-policy", "preset", AUTOCONFIG_EXEC_POLICY_PRESET]),
+  );
+  report.push(
+    `[managed-defaults] exec-policy preset ${AUTOCONFIG_EXEC_POLICY_PRESET} exit=${presetResult.code}`,
+  );
+
+  const execSetResult = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs([
+      "exec-policy",
+      "set",
+      "--host",
+      AUTOCONFIG_EXEC_HOST,
+      "--security",
+      "full",
+      "--ask",
+      "off",
+      "--ask-fallback",
+      "full",
+    ]),
+  );
+  report.push(
+    `[managed-defaults] exec-policy set host=${AUTOCONFIG_EXEC_HOST} security=full ask=off exit=${execSetResult.code}`,
+  );
+
+  if (await configPathExists("channels.telegram")) {
+    const dmResult = await configSetJson(
+      "channels.telegram.dmPolicy",
+      AUTOCONFIG_TELEGRAM_DM_POLICY,
+    );
+    report.push(
+      `[managed-defaults] channels.telegram.dmPolicy=${AUTOCONFIG_TELEGRAM_DM_POLICY} exit=${dmResult.code}`,
+    );
+
+    const groupResult = await configSetJson(
+      "channels.telegram.groupPolicy",
+      AUTOCONFIG_TELEGRAM_GROUP_POLICY,
+    );
+    report.push(
+      `[managed-defaults] channels.telegram.groupPolicy=${AUTOCONFIG_TELEGRAM_GROUP_POLICY} exit=${groupResult.code}`,
+    );
+
+    const allowFromResult = await configSetJson(
+      "channels.telegram.allowFrom",
+      AUTOCONFIG_TELEGRAM_ALLOW_FROM,
+    );
+    report.push(
+      `[managed-defaults] channels.telegram.allowFrom=${JSON.stringify(AUTOCONFIG_TELEGRAM_ALLOW_FROM)} exit=${allowFromResult.code}`,
+    );
+  } else {
+    report.push("[managed-defaults] channels.telegram not configured; skipping telegram policy defaults");
+  }
+
+  if (AUTOCONFIG_OWNER_ALLOW_FROM) {
+    const ownerResult = await configSetJson(
+      "commands.ownerAllowFrom",
+      AUTOCONFIG_OWNER_ALLOW_FROM,
+    );
+    report.push(
+      `[managed-defaults] commands.ownerAllowFrom=${JSON.stringify(AUTOCONFIG_OWNER_ALLOW_FROM)} exit=${ownerResult.code}`,
+    );
+  } else {
+    report.push("[managed-defaults] owner allowlist env not set; leaving commands.ownerAllowFrom unchanged");
+  }
+
+  return report.join("\n");
+}
+
 async function syncAllowedOrigins() {
   const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
   if (!publicDomain) return;
@@ -980,13 +1157,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       }
 
       if (payload.telegramToken?.trim()) {
-        extra += await configureChannel("telegram", {
-          enabled: true,
-          dmPolicy: "pairing",
-          botToken: payload.telegramToken.trim(),
-          groupPolicy: "open",
-          streamMode: "partial",
-        });
+        const addTelegram = await configureTelegramViaChannelsAdd(
+          payload.telegramToken.trim(),
+        );
+        extra += `\n[telegram add] exit=${addTelegram.code}\n${addTelegram.output || ""}`;
       }
 
       if (payload.discordToken?.trim()) {
@@ -1005,6 +1179,9 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
           appToken: payload.slackAppToken?.trim() || undefined,
         });
       }
+
+      extra += "\n[setup] Applying managed defaults...\n";
+      extra += `${await applyManagedDefaults("setup")}\n`;
 
       extra += "\n[setup] Starting gateway...\n";
       await restartGateway();
@@ -1043,6 +1220,18 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
         path.join(STATE_DIR, "gateway.token"),
       ),
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+      managedDefaults: {
+        enabled: AUTOCONFIG_ENABLED,
+        telegram: {
+          dmPolicy: AUTOCONFIG_TELEGRAM_DM_POLICY,
+          groupPolicy: AUTOCONFIG_TELEGRAM_GROUP_POLICY,
+          allowFrom: AUTOCONFIG_TELEGRAM_ALLOW_FROM,
+        },
+        sandboxMode: AUTOCONFIG_SANDBOX_MODE,
+        execPolicyPreset: AUTOCONFIG_EXEC_POLICY_PRESET,
+        execHost: AUTOCONFIG_EXEC_HOST,
+        ownerAllowFrom: AUTOCONFIG_OWNER_ALLOW_FROM ?? null,
+      },
     },
     openclaw: {
       entry: OPENCLAW_ENTRY,
@@ -1448,6 +1637,12 @@ const server = app.listen(PORT, () => {
         if (dr.output) log.info("wrapper", dr.output);
       } catch (err) {
         log.warn("wrapper", `doctor --fix failed: ${err.message}`);
+      }
+      try {
+        const managedDefaults = await applyManagedDefaults("boot");
+        if (managedDefaults) log.info("wrapper", managedDefaults);
+      } catch (err) {
+        log.warn("wrapper", `managed defaults failed: ${err.message}`);
       }
       await ensureGatewayRunning();
     })().catch((err) => {

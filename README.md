@@ -55,6 +55,20 @@ This template exposes your OpenClaw gateway to the public internet.
 - `TUI_IDLE_TIMEOUT_MS=300000`
 - `TUI_MAX_SESSION_MS=1800000`
 
+### Managed Defaults (Recommended on Railway)
+
+These are automatically re-applied on startup (and after `/setup`) so redeploys keep your intended posture:
+
+- `OPENCLAW_BOOTSTRAP_AUTOCONFIG=true`
+- `OPENCLAW_BOOTSTRAP_SANDBOX_MODE=off` (Railway containers do not provide Docker)
+- `OPENCLAW_BOOTSTRAP_EXEC_POLICY_PRESET=yolo`
+- `OPENCLAW_BOOTSTRAP_EXEC_HOST=gateway`
+- `OPENCLAW_BOOTSTRAP_TELEGRAM_DM_POLICY=pairing`
+- `OPENCLAW_BOOTSTRAP_TELEGRAM_GROUP_POLICY=allowlist`
+- `OPENCLAW_BOOTSTRAP_TELEGRAM_ALLOW_FROM=[]`
+- Optional owner allowlist:
+  - `OPENCLAW_BOOTSTRAP_OWNER_ALLOW_FROM=["telegram:123456789"]`
+
 ## Day-1 Setup Checklist
 
 - Confirm `/setup` loads and accepts password
@@ -139,6 +153,11 @@ docker run --rm -p 8080:8080 \
 - `OPENCLAW_STATE_DIR` or `OPENCLAW_WORKSPACE_DIR` is not on `/data`
 - Fix both vars and redeploy
 - Confirm the Railway volume is mounted at `/data` on this service
+
+### Telegram config/schema breaks after upgrades
+
+- The wrapper now configures Telegram via `openclaw channels add` during setup, then applies managed defaults.
+- Avoid manual root-owned edits under `/data/.openclaw`; they can break config watch permissions.
 
 ### TUI not visible
 
