@@ -61,6 +61,12 @@ This template exposes your OpenClaw gateway to the public internet.
 - `INTERNAL_BACKEND_PORT=55555`
 - `DEV_WEB_STRIP_PREFIX=true`
 - `DEV_API_STRIP_PREFIX=true`
+- `DEV_WEB_START_CMD` (optional: auto-start frontend process)
+- `DEV_API_START_CMD` (optional: auto-start backend process)
+- `DEV_WEB_START_CWD` (optional: working dir for frontend command)
+- `DEV_API_START_CWD` (optional: working dir for backend command)
+- `DEV_PROCESS_SHELL=/bin/bash`
+- `DEV_PROCESS_AUTORESTART=true`
 - `ENABLE_WEB_TUI=false`
 - `TUI_IDLE_TIMEOUT_MS=300000`
 - `TUI_MAX_SESSION_MS=1800000`
@@ -171,6 +177,11 @@ Notes:
 - WebSocket upgrades are supported for both subpaths (useful for Vite HMR).
 - If your frontend is configured with `base: "/dev/web/"`, set `DEV_WEB_STRIP_PREFIX=false`.
 - If your backend expects `/dev/api/*` paths directly, set `DEV_API_STRIP_PREFIX=false`.
+- By default, this wrapper only proxies. It does not invent frontend/backend processes.
+- To auto-start processes on boot/redeploy, define:
+  - `DEV_WEB_START_CMD` and `DEV_WEB_START_CWD`
+  - `DEV_API_START_CMD` and `DEV_API_START_CWD`
+- If enabled, the wrapper restarts those child processes automatically when they crash (`DEV_PROCESS_AUTORESTART=true`).
 
 ## Troubleshooting
 
@@ -190,6 +201,12 @@ Notes:
 - `OPENCLAW_STATE_DIR` or `OPENCLAW_WORKSPACE_DIR` is not on `/data`
 - Fix both vars and redeploy
 - Confirm the Railway volume is mounted at `/data` on this service
+
+### `Dev route target unavailable`
+
+- This means the wrapper tried to proxy to `${DEV_WEB_TARGET}` or `${DEV_API_TARGET}`, but nothing was listening there.
+- Confirm the target process is running inside the same container.
+- Recommended: set `DEV_WEB_START_CMD` / `DEV_API_START_CMD` so the wrapper starts both services at boot.
 
 ### MCP scraper configured but not used in chat
 

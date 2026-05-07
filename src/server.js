@@ -259,6 +259,13 @@ function normalizeRoutePath(value, fallback) {
   return normalized || "/";
 }
 
+function resolveProcessCwd(value, fallback) {
+  const raw = value?.trim();
+  if (!raw) return fallback;
+  if (path.isAbsolute(raw)) return raw;
+  return path.resolve(fallback, raw);
+}
+
 const AUTOCONFIG_ENABLED = parseBooleanEnv(
   process.env.OPENCLAW_BOOTSTRAP_AUTOCONFIG,
   Boolean(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_ID),
@@ -288,6 +295,21 @@ const DEV_WEB_STRIP_PREFIX = parseBooleanEnv(
 const DEV_API_STRIP_PREFIX = parseBooleanEnv(
   process.env.DEV_API_STRIP_PREFIX,
   true,
+);
+const DEV_PROCESS_SHELL = process.env.DEV_PROCESS_SHELL?.trim() || "/bin/bash";
+const DEV_PROCESS_AUTORESTART = parseBooleanEnv(
+  process.env.DEV_PROCESS_AUTORESTART,
+  true,
+);
+const DEV_WEB_START_CMD = process.env.DEV_WEB_START_CMD?.trim() || "";
+const DEV_API_START_CMD = process.env.DEV_API_START_CMD?.trim() || "";
+const DEV_WEB_START_CWD = resolveProcessCwd(
+  process.env.DEV_WEB_START_CWD,
+  WORKSPACE_DIR,
+);
+const DEV_API_START_CWD = resolveProcessCwd(
+  process.env.DEV_API_START_CWD,
+  WORKSPACE_DIR,
 );
 const AUTOCONFIG_TELEGRAM_DM_POLICY =
   process.env.OPENCLAW_BOOTSTRAP_TELEGRAM_DM_POLICY?.trim() || "pairing";
@@ -519,9 +541,122 @@ async function syncAllowedOrigins() {
 let gatewayProc = null;
 let gatewayStarting = null;
 let shuttingDown = false;
+const managedDevTargets = {
+  web: {
+    label: "dev-web",
+    command: DEV_WEB_START_CMD,
+    cwd: DEV_WEB_START_CWD,
+    port: INTERNAL_FRONTEND_PORT,
+    process: null,
+  },
+  api: {
+    label: "dev-api",
+    command: DEV_API_START_CMD,
+    cwd: DEV_API_START_CWD,
+    port: INTERNAL_BACKEND_PORT,
+    process: null,
+  },
+};
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function pipeManagedProcessLogs(label, stream, level) {
+  if (!stream) return;
+  stream.on("data", (chunk) => {
+    const lines = chunk
+      .toString("utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      log[level](label, line);
+    }
+  });
+}
+
+function stopManagedProcess(target, signal = "SIGTERM") {
+  if (!target.process) return;
+  try {
+    target.process.kill(signal);
+  } catch (err) {
+    log.warn(target.label, `failed to stop process: ${err.message}`);
+  }
+}
+
+function startManagedProcess(target) {
+  if (!target.command) return;
+  if (target.process) return;
+
+  if (!fs.existsSync(target.cwd)) {
+    log.warn(
+      target.label,
+      `start skipped: cwd does not exist (${target.cwd}). Set ${target.label === "dev-web" ? "DEV_WEB_START_CWD" : "DEV_API_START_CWD"} correctly.`,
+    );
+    return;
+  }
+
+  log.info(
+    target.label,
+    `starting: ${DEV_PROCESS_SHELL} -lc "${target.command}" (cwd=${target.cwd})`,
+  );
+
+  const proc = childProcess.spawn(DEV_PROCESS_SHELL, ["-lc", target.command], {
+    cwd: target.cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: STATE_DIR,
+      OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+      PORT: String(target.port),
+      HOST: "127.0.0.1",
+    },
+  });
+
+  target.process = proc;
+  pipeManagedProcessLogs(target.label, proc.stdout, "info");
+  pipeManagedProcessLogs(target.label, proc.stderr, "warn");
+
+  proc.on("error", (err) => {
+    log.error(target.label, `spawn error: ${String(err)}`);
+    target.process = null;
+  });
+
+  proc.on("exit", (code, signal) => {
+    target.process = null;
+    if (shuttingDown) return;
+    log.warn(target.label, `exited code=${code} signal=${signal}`);
+    if (DEV_PROCESS_AUTORESTART) {
+      log.info(target.label, "restarting in 2s...");
+      setTimeout(() => {
+        if (!shuttingDown) startManagedProcess(target);
+      }, 2000);
+    }
+  });
+}
+
+function startManagedDevTargets() {
+  if (!ENABLE_DEV_ROUTE_PROXY) return;
+
+  const webTarget = managedDevTargets.web;
+  const apiTarget = managedDevTargets.api;
+
+  if (!webTarget.command) {
+    log.warn(
+      webTarget.label,
+      `no command configured. ${DEV_WEB_BASE_PATH} will fail unless ${DEV_WEB_TARGET} is served by another process.`,
+    );
+  }
+  if (!apiTarget.command) {
+    log.warn(
+      apiTarget.label,
+      `no command configured. ${DEV_API_BASE_PATH} will fail unless ${DEV_API_TARGET} is served by another process.`,
+    );
+  }
+
+  startManagedProcess(webTarget);
+  startManagedProcess(apiTarget);
 }
 
 async function waitForGatewayReady(opts = {}) {
@@ -1746,7 +1881,9 @@ devProxy.on("error", (err, req, res) => {
   log.error("dev-proxy", `${req?.url || "unknown"} ${String(err)}`);
   if (res && typeof res.headersSent !== "undefined" && !res.headersSent) {
     res.writeHead(502, { "Content-Type": "text/plain" });
-    res.end("Dev route target unavailable.");
+    res.end(
+      "Dev route target unavailable. Ensure a service is listening on the configured target or set DEV_WEB_START_CMD/DEV_API_START_CMD so the wrapper starts it automatically.",
+    );
   }
 });
 
@@ -1837,6 +1974,8 @@ const server = app.listen(PORT, () => {
     `${DEV_API_BASE_PATH} -> ${DEV_API_TARGET} (stripPrefix=${DEV_API_STRIP_PREFIX})`,
   );
   log.info("wrapper", `configured: ${isConfigured()}`);
+
+  startManagedDevTargets();
 
   if (isConfigured()) {
     (async () => {
@@ -1957,6 +2096,12 @@ async function gracefulShutdown(signal) {
       log.warn("wrapper", `error killing gateway: ${err.message}`);
     }
   }
+
+  stopManagedProcess(managedDevTargets.web, "SIGTERM");
+  stopManagedProcess(managedDevTargets.api, "SIGTERM");
+  await sleep(300);
+  stopManagedProcess(managedDevTargets.web, "SIGKILL");
+  stopManagedProcess(managedDevTargets.api, "SIGKILL");
 
   process.exit(0);
 }
