@@ -235,6 +235,15 @@ function parseListEnv(value) {
     .filter(Boolean);
 }
 
+function normalizeConfigKeySegment(value, fallback = "default") {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
 const AUTOCONFIG_ENABLED = parseBooleanEnv(
   process.env.OPENCLAW_BOOTSTRAP_AUTOCONFIG,
   Boolean(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_ID),
@@ -257,6 +266,21 @@ const AUTOCONFIG_VERBOSE_DEFAULT =
   process.env.OPENCLAW_BOOTSTRAP_VERBOSE_DEFAULT?.trim() || "off";
 const AUTOCONFIG_TOOL_PROGRESS_DETAIL =
   process.env.OPENCLAW_BOOTSTRAP_TOOL_PROGRESS_DETAIL?.trim() || "raw";
+const AUTOCONFIG_MCP_SCRAPER_ENABLED = parseBooleanEnv(
+  process.env.OPENCLAW_BOOTSTRAP_MCP_SCRAPER_ENABLED,
+  false,
+);
+const AUTOCONFIG_MCP_SCRAPER_NAME = normalizeConfigKeySegment(
+  process.env.OPENCLAW_BOOTSTRAP_MCP_SCRAPER_NAME?.trim() || "scraper",
+  "scraper",
+);
+const AUTOCONFIG_MCP_SCRAPER_COMMAND =
+  process.env.OPENCLAW_BOOTSTRAP_MCP_SCRAPER_COMMAND?.trim() || "npx";
+const AUTOCONFIG_MCP_SCRAPER_ARGS =
+  parseListEnv(process.env.OPENCLAW_BOOTSTRAP_MCP_SCRAPER_ARGS) ?? [
+    "-y",
+    "mcp-server-scraper",
+  ];
 const AUTOCONFIG_OWNER_ALLOW_FROM =
   parseListEnv(process.env.OPENCLAW_BOOTSTRAP_OWNER_ALLOW_FROM) ??
   parseListEnv(process.env.OPENCLAW_OWNER_ALLOW_FROM);
@@ -344,6 +368,20 @@ async function applyManagedDefaults(reason = "boot") {
   report.push(
     `[managed-defaults] agents.defaults.toolProgressDetail=${AUTOCONFIG_TOOL_PROGRESS_DETAIL} exit=${toolProgressResult.code}`,
   );
+
+  if (AUTOCONFIG_MCP_SCRAPER_ENABLED) {
+    const mcpServerPath = `mcp.servers.${AUTOCONFIG_MCP_SCRAPER_NAME}`;
+    const mcpServerConfig = {
+      command: AUTOCONFIG_MCP_SCRAPER_COMMAND,
+      args: AUTOCONFIG_MCP_SCRAPER_ARGS,
+    };
+    const mcpServerResult = await configSetJson(mcpServerPath, mcpServerConfig);
+    report.push(
+      `[managed-defaults] ${mcpServerPath}=${JSON.stringify(mcpServerConfig)} exit=${mcpServerResult.code}`,
+    );
+  } else {
+    report.push("[managed-defaults] mcp scraper bootstrap disabled");
+  }
 
   const presetResult = await runCmd(
     OPENCLAW_NODE,

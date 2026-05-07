@@ -66,6 +66,10 @@ These are automatically re-applied on startup (and after `/setup`) so redeploys 
 - `OPENCLAW_BOOTSTRAP_EXECUTION_CONTRACT=strict-agentic` (execute-first behavior on GPT-5 family)
 - `OPENCLAW_BOOTSTRAP_VERBOSE_DEFAULT=off`
 - `OPENCLAW_BOOTSTRAP_TOOL_PROGRESS_DETAIL=raw`
+- `OPENCLAW_BOOTSTRAP_MCP_SCRAPER_ENABLED=true`
+- `OPENCLAW_BOOTSTRAP_MCP_SCRAPER_NAME=scraper`
+- `OPENCLAW_BOOTSTRAP_MCP_SCRAPER_COMMAND=npx`
+- `OPENCLAW_BOOTSTRAP_MCP_SCRAPER_ARGS=["-y","mcp-server-scraper"]`
 - `OPENCLAW_BOOTSTRAP_TELEGRAM_DM_POLICY=pairing`
 - `OPENCLAW_BOOTSTRAP_TELEGRAM_GROUP_POLICY=allowlist`
 - `OPENCLAW_BOOTSTRAP_TELEGRAM_ALLOW_FROM=[]`
@@ -156,6 +160,20 @@ docker run --rm -p 8080:8080 \
 - `OPENCLAW_STATE_DIR` or `OPENCLAW_WORKSPACE_DIR` is not on `/data`
 - Fix both vars and redeploy
 - Confirm the Railway volume is mounted at `/data` on this service
+
+### MCP scraper configured but not used in chat
+
+- Verify config:
+  - `openclaw mcp list --json`
+- Confirm server tool catalog directly (inside container):
+  - `python3 - <<'PY'`
+  - `import subprocess, json`
+  - `p=subprocess.Popen(["npx","-y","mcp-server-scraper"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1)`
+  - `p.stdin.write(json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}})+"\\n"); p.stdin.flush(); print(p.stdout.readline().strip())`
+  - `p.stdin.write(json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})+"\\n"); p.stdin.flush(); print(p.stdout.readline().strip())`
+  - `p.terminate()`
+  - `PY`
+- Start a fresh chat session (`/new`) so the agent rebuilds runtime context.
 
 ### Telegram config/schema breaks after upgrades
 
