@@ -18,6 +18,9 @@ This template exposes your OpenClaw gateway to the public internet.
 - Setup Wizard at `/setup` (Basic auth protected)
 - Microsoft Foundry (Azure OpenAI) setup in the wizard (API key + endpoint)
 - Optional browser TUI at `/tui`
+- Optional single-port dev reroutes:
+  - `/dev/web` -> `127.0.0.1:48888`
+  - `/dev/api` -> `127.0.0.1:55555`
 - Persistent state on Railway volume (`/data`)
 - Health endpoint at `/healthz`
 - Diagnostics and logs via setup tools + `/logs`
@@ -51,6 +54,13 @@ This template exposes your OpenClaw gateway to the public internet.
 - `PORT=8080`
 - `INTERNAL_GATEWAY_PORT=18789`
 - `INTERNAL_GATEWAY_HOST=127.0.0.1`
+- `ENABLE_DEV_ROUTE_PROXY=true`
+- `DEV_WEB_BASE_PATH=/dev/web`
+- `DEV_API_BASE_PATH=/dev/api`
+- `INTERNAL_FRONTEND_PORT=48888`
+- `INTERNAL_BACKEND_PORT=55555`
+- `DEV_WEB_STRIP_PREFIX=true`
+- `DEV_API_STRIP_PREFIX=true`
 - `ENABLE_WEB_TUI=false`
 - `TUI_IDLE_TIMEOUT_MS=300000`
 - `TUI_MAX_SESSION_MS=1800000`
@@ -141,6 +151,26 @@ docker run --rm -p 8080:8080 \
 - Setup: `http://localhost:8080/setup` (password: `test`)
 - UI: `http://localhost:8080/openclaw`
 - TUI: `http://localhost:8080/tui`
+- Dev web proxy: `http://localhost:8080/dev/web`
+- Dev api proxy: `http://localhost:8080/dev/api`
+
+## Single-Port Rerouting (Railway-Friendly)
+
+Railway publicly exposes one `PORT` per service. This wrapper can proxy extra internal services through subpaths:
+
+- `${DEV_WEB_BASE_PATH}` -> `${DEV_WEB_TARGET}` (or `127.0.0.1:${INTERNAL_FRONTEND_PORT}`)
+- `${DEV_API_BASE_PATH}` -> `${DEV_API_TARGET}` (or `127.0.0.1:${INTERNAL_BACKEND_PORT}`)
+
+Default layout in this template:
+
+- `/dev/web` -> `http://127.0.0.1:48888`
+- `/dev/api` -> `http://127.0.0.1:55555`
+
+Notes:
+
+- WebSocket upgrades are supported for both subpaths (useful for Vite HMR).
+- If your frontend is configured with `base: "/dev/web/"`, set `DEV_WEB_STRIP_PREFIX=false`.
+- If your backend expects `/dev/api/*` paths directly, set `DEV_API_STRIP_PREFIX=false`.
 
 ## Troubleshooting
 

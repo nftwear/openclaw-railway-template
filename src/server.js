@@ -174,6 +174,14 @@ const INTERNAL_GATEWAY_PORT = Number.parseInt(
 );
 const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
 const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`;
+const INTERNAL_FRONTEND_PORT = Number.parseInt(
+  process.env.INTERNAL_FRONTEND_PORT ?? "48888",
+  10,
+);
+const INTERNAL_BACKEND_PORT = Number.parseInt(
+  process.env.INTERNAL_BACKEND_PORT ?? "55555",
+  10,
+);
 
 const OPENCLAW_ENTRY =
   process.env.OPENCLAW_ENTRY?.trim() || "/openclaw/dist/entry.js";
@@ -244,9 +252,42 @@ function normalizeConfigKeySegment(value, fallback = "default") {
   return normalized || fallback;
 }
 
+function normalizeRoutePath(value, fallback) {
+  const raw = String(value ?? "").trim() || fallback;
+  const prefixed = raw.startsWith("/") ? raw : `/${raw}`;
+  const normalized = prefixed.replace(/\/+$/, "");
+  return normalized || "/";
+}
+
 const AUTOCONFIG_ENABLED = parseBooleanEnv(
   process.env.OPENCLAW_BOOTSTRAP_AUTOCONFIG,
   Boolean(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_ENVIRONMENT_ID),
+);
+const ENABLE_DEV_ROUTE_PROXY = parseBooleanEnv(
+  process.env.ENABLE_DEV_ROUTE_PROXY,
+  true,
+);
+const DEV_WEB_BASE_PATH = normalizeRoutePath(
+  process.env.DEV_WEB_BASE_PATH,
+  "/dev/web",
+);
+const DEV_API_BASE_PATH = normalizeRoutePath(
+  process.env.DEV_API_BASE_PATH,
+  "/dev/api",
+);
+const DEV_WEB_TARGET =
+  process.env.DEV_WEB_TARGET?.trim() ||
+  `http://127.0.0.1:${INTERNAL_FRONTEND_PORT}`;
+const DEV_API_TARGET =
+  process.env.DEV_API_TARGET?.trim() ||
+  `http://127.0.0.1:${INTERNAL_BACKEND_PORT}`;
+const DEV_WEB_STRIP_PREFIX = parseBooleanEnv(
+  process.env.DEV_WEB_STRIP_PREFIX,
+  true,
+);
+const DEV_API_STRIP_PREFIX = parseBooleanEnv(
+  process.env.DEV_API_STRIP_PREFIX,
+  true,
 );
 const AUTOCONFIG_TELEGRAM_DM_POLICY =
   process.env.OPENCLAW_BOOTSTRAP_TELEGRAM_DM_POLICY?.trim() || "pairing";
@@ -1300,6 +1341,19 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
         execHost: AUTOCONFIG_EXEC_HOST,
         ownerAllowFrom: AUTOCONFIG_OWNER_ALLOW_FROM ?? null,
       },
+      devRouteProxy: {
+        enabled: ENABLE_DEV_ROUTE_PROXY,
+        web: {
+          basePath: DEV_WEB_BASE_PATH,
+          target: DEV_WEB_TARGET,
+          stripPrefix: DEV_WEB_STRIP_PREFIX,
+        },
+        api: {
+          basePath: DEV_API_BASE_PATH,
+          target: DEV_API_TARGET,
+          stripPrefix: DEV_API_STRIP_PREFIX,
+        },
+      },
     },
     openclaw: {
       entry: OPENCLAW_ENTRY,
@@ -1619,8 +1673,52 @@ function createTuiWebSocketServer(httpServer) {
   return wss;
 }
 
+function pathMatchesBasePath(pathname, basePath) {
+  return pathname === basePath || pathname.startsWith(`${basePath}/`);
+}
+
+function rewriteProxyPath(reqUrl, basePath, stripPrefix) {
+  const parsed = new URL(reqUrl, "http://127.0.0.1");
+  let pathname = parsed.pathname;
+  if (stripPrefix && pathMatchesBasePath(pathname, basePath)) {
+    pathname = pathname.slice(basePath.length);
+    if (!pathname.startsWith("/")) pathname = `/${pathname}`;
+    if (!pathname) pathname = "/";
+  }
+  return `${pathname}${parsed.search}`;
+}
+
+function proxyHttpWithRewrite(proxyInstance, req, res, target, rewrittenPath) {
+  const originalUrl = req.url;
+  req.url = rewrittenPath;
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    req.url = originalUrl;
+  };
+  res.once("finish", restore);
+  res.once("close", restore);
+  proxyInstance.web(req, res, { target });
+}
+
+function proxyWsWithRewrite(proxyInstance, req, socket, head, target, rewrittenPath) {
+  const originalUrl = req.url;
+  req.url = rewrittenPath;
+  proxyInstance.ws(req, socket, head, { target });
+  req.url = originalUrl;
+}
+
 const proxy = httpProxy.createProxyServer({
   target: GATEWAY_TARGET,
+  ws: true,
+  xfwd: true,
+  changeOrigin: true,
+  proxyTimeout: 120_000,
+  timeout: 120_000,
+});
+
+const devProxy = httpProxy.createProxyServer({
   ws: true,
   xfwd: true,
   changeOrigin: true,
@@ -1644,6 +1742,14 @@ proxy.on("error", (err, _req, res) => {
   }
 });
 
+devProxy.on("error", (err, req, res) => {
+  log.error("dev-proxy", `${req?.url || "unknown"} ${String(err)}`);
+  if (res && typeof res.headersSent !== "undefined" && !res.headersSent) {
+    res.writeHead(502, { "Content-Type": "text/plain" });
+    res.end("Dev route target unavailable.");
+  }
+});
+
 const PROXY_ORIGIN = process.env.RAILWAY_PUBLIC_DOMAIN
   ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
   : GATEWAY_TARGET;
@@ -1658,6 +1764,30 @@ proxy.on("proxyReq", (proxyReq, req, res) => {
 proxy.on("proxyReqWs", (proxyReq, req, socket, options, head) => {
   proxyReq.setHeader("Authorization", `Bearer ${OPENCLAW_GATEWAY_TOKEN}`);
   proxyReq.setHeader("Origin", PROXY_ORIGIN);
+});
+
+app.use((req, res, next) => {
+  if (!ENABLE_DEV_ROUTE_PROXY) return next();
+
+  if (pathMatchesBasePath(req.path, DEV_WEB_BASE_PATH)) {
+    const rewrittenPath = rewriteProxyPath(
+      req.url,
+      DEV_WEB_BASE_PATH,
+      DEV_WEB_STRIP_PREFIX,
+    );
+    return proxyHttpWithRewrite(devProxy, req, res, DEV_WEB_TARGET, rewrittenPath);
+  }
+
+  if (pathMatchesBasePath(req.path, DEV_API_BASE_PATH)) {
+    const rewrittenPath = rewriteProxyPath(
+      req.url,
+      DEV_API_BASE_PATH,
+      DEV_API_STRIP_PREFIX,
+    );
+    return proxyHttpWithRewrite(devProxy, req, res, DEV_API_TARGET, rewrittenPath);
+  }
+
+  return next();
 });
 
 app.use(async (req, res) => {
@@ -1694,6 +1824,18 @@ const server = app.listen(PORT, () => {
   log.info("wrapper", `listening on port ${PORT}`);
   log.info("wrapper", `setup wizard: http://localhost:${PORT}/setup`);
   log.info("wrapper", `web TUI: ${ENABLE_WEB_TUI ? "enabled" : "disabled"}`);
+  log.info(
+    "wrapper",
+    `dev route proxy: ${ENABLE_DEV_ROUTE_PROXY ? "enabled" : "disabled"}`,
+  );
+  log.info(
+    "wrapper",
+    `${DEV_WEB_BASE_PATH} -> ${DEV_WEB_TARGET} (stripPrefix=${DEV_WEB_STRIP_PREFIX})`,
+  );
+  log.info(
+    "wrapper",
+    `${DEV_API_BASE_PATH} -> ${DEV_API_TARGET} (stripPrefix=${DEV_API_STRIP_PREFIX})`,
+  );
   log.info("wrapper", `configured: ${isConfigured()}`);
 
   if (isConfigured()) {
@@ -1746,6 +1888,26 @@ server.on("upgrade", async (req, socket, head) => {
     tuiWss.handleUpgrade(req, socket, head, (ws) => {
       tuiWss.emit("connection", ws, req);
     });
+    return;
+  }
+
+  if (ENABLE_DEV_ROUTE_PROXY && pathMatchesBasePath(url.pathname, DEV_WEB_BASE_PATH)) {
+    const rewrittenPath = rewriteProxyPath(
+      req.url,
+      DEV_WEB_BASE_PATH,
+      DEV_WEB_STRIP_PREFIX,
+    );
+    proxyWsWithRewrite(devProxy, req, socket, head, DEV_WEB_TARGET, rewrittenPath);
+    return;
+  }
+
+  if (ENABLE_DEV_ROUTE_PROXY && pathMatchesBasePath(url.pathname, DEV_API_BASE_PATH)) {
+    const rewrittenPath = rewriteProxyPath(
+      req.url,
+      DEV_API_BASE_PATH,
+      DEV_API_STRIP_PREFIX,
+    );
+    proxyWsWithRewrite(devProxy, req, socket, head, DEV_API_TARGET, rewrittenPath);
     return;
   }
 

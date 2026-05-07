@@ -1,4 +1,4 @@
-FROM node:22-bookworm
+FROM node:24-bookworm
 
 ARG OPENCLAW_VERSION=latest
 
@@ -60,6 +60,13 @@ ENV HOMEBREW_CELLAR="/home/linuxbrew/.linuxbrew/Cellar"
 ENV HOMEBREW_REPOSITORY="/home/linuxbrew/.linuxbrew/Homebrew"
 
 ENV PORT=8080
+ENV INTERNAL_FRONTEND_PORT=48888
+ENV INTERNAL_BACKEND_PORT=55555
+ENV ENABLE_DEV_ROUTE_PROXY=true
+ENV DEV_WEB_BASE_PATH=/dev/web
+ENV DEV_API_BASE_PATH=/dev/api
+ENV DEV_WEB_STRIP_PREFIX=true
+ENV DEV_API_STRIP_PREFIX=true
 ENV OPENCLAW_ENTRY=/usr/local/lib/node_modules/openclaw/dist/entry.js
 EXPOSE 8080
 
