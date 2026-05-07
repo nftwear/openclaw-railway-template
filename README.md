@@ -63,6 +63,9 @@ These are automatically re-applied on startup (and after `/setup`) so redeploys 
 - `OPENCLAW_BOOTSTRAP_SANDBOX_MODE=off` (Railway containers do not provide Docker)
 - `OPENCLAW_BOOTSTRAP_EXEC_POLICY_PRESET=yolo`
 - `OPENCLAW_BOOTSTRAP_EXEC_HOST=gateway`
+- `OPENCLAW_BOOTSTRAP_EXECUTION_CONTRACT=strict-agentic` (execute-first behavior on GPT-5 family)
+- `OPENCLAW_BOOTSTRAP_VERBOSE_DEFAULT=off`
+- `OPENCLAW_BOOTSTRAP_TOOL_PROGRESS_DETAIL=raw`
 - `OPENCLAW_BOOTSTRAP_TELEGRAM_DM_POLICY=pairing`
 - `OPENCLAW_BOOTSTRAP_TELEGRAM_GROUP_POLICY=allowlist`
 - `OPENCLAW_BOOTSTRAP_TELEGRAM_ALLOW_FROM=[]`

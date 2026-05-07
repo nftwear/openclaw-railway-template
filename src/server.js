@@ -251,6 +251,12 @@ const AUTOCONFIG_EXEC_POLICY_PRESET =
   process.env.OPENCLAW_BOOTSTRAP_EXEC_POLICY_PRESET?.trim() || "yolo";
 const AUTOCONFIG_EXEC_HOST =
   process.env.OPENCLAW_BOOTSTRAP_EXEC_HOST?.trim() || "gateway";
+const AUTOCONFIG_EXECUTION_CONTRACT =
+  process.env.OPENCLAW_BOOTSTRAP_EXECUTION_CONTRACT?.trim() || "strict-agentic";
+const AUTOCONFIG_VERBOSE_DEFAULT =
+  process.env.OPENCLAW_BOOTSTRAP_VERBOSE_DEFAULT?.trim() || "off";
+const AUTOCONFIG_TOOL_PROGRESS_DETAIL =
+  process.env.OPENCLAW_BOOTSTRAP_TOOL_PROGRESS_DETAIL?.trim() || "raw";
 const AUTOCONFIG_OWNER_ALLOW_FROM =
   parseListEnv(process.env.OPENCLAW_BOOTSTRAP_OWNER_ALLOW_FROM) ??
   parseListEnv(process.env.OPENCLAW_OWNER_ALLOW_FROM);
@@ -313,6 +319,30 @@ async function applyManagedDefaults(reason = "boot") {
   );
   report.push(
     `[managed-defaults] agents.defaults.sandbox.mode=${AUTOCONFIG_SANDBOX_MODE} exit=${sandboxResult.code}`,
+  );
+
+  const executionContractResult = await configSetJson(
+    "agents.defaults.embeddedPi.executionContract",
+    AUTOCONFIG_EXECUTION_CONTRACT,
+  );
+  report.push(
+    `[managed-defaults] agents.defaults.embeddedPi.executionContract=${AUTOCONFIG_EXECUTION_CONTRACT} exit=${executionContractResult.code}`,
+  );
+
+  const verboseResult = await configSetJson(
+    "agents.defaults.verboseDefault",
+    AUTOCONFIG_VERBOSE_DEFAULT,
+  );
+  report.push(
+    `[managed-defaults] agents.defaults.verboseDefault=${AUTOCONFIG_VERBOSE_DEFAULT} exit=${verboseResult.code}`,
+  );
+
+  const toolProgressResult = await configSetJson(
+    "agents.defaults.toolProgressDetail",
+    AUTOCONFIG_TOOL_PROGRESS_DETAIL,
+  );
+  report.push(
+    `[managed-defaults] agents.defaults.toolProgressDetail=${AUTOCONFIG_TOOL_PROGRESS_DETAIL} exit=${toolProgressResult.code}`,
   );
 
   const presetResult = await runCmd(
