@@ -25,6 +25,11 @@ This template exposes your OpenClaw gateway to the public internet.
 - Health endpoint at `/healthz`
 - Diagnostics and logs via setup tools + `/logs`
 
+## Checkin Control Integration
+
+- Ops guide: `README.CHECKIN-CONTROL-ROUTES.md`
+- Agent skill: `.agents/skills/configure-checkin-control-dev-routes/SKILL.md`
+
 ## Quick Start (Railway)
 
 1. Deploy this template to Railway.
