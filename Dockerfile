@@ -69,6 +69,12 @@ ENV DEV_WEB_BASE_PATH=/dev/web
 ENV DEV_API_BASE_PATH=/dev/api
 ENV DEV_WEB_STRIP_PREFIX=true
 ENV DEV_API_STRIP_PREFIX=true
+ENV DEV_WEB_START_CWD=/data/workspace/checkin-control
+ENV DEV_API_START_CWD=/data/workspace/checkin-control
+ENV DEV_WEB_START_CMD="npm run dev -w @checkin-control/web -- --host 127.0.0.1 --port 48888"
+ENV DEV_API_START_CMD="npm run dev -w @checkin-control/api"
+ENV DEV_PROCESS_SHELL=/bin/bash
+ENV DEV_PROCESS_AUTORESTART=true
 ENV OPENCLAW_ENTRY=/usr/local/lib/node_modules/openclaw/dist/entry.js
 EXPOSE 8080
 
